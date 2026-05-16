@@ -1,0 +1,33 @@
+# Python
+__pycache__/
+*.py[cod]
+*$py.class
+
+# Virtual environments
+venv/
+.env
+
+# Editor directories and files
+.vscode/
+.idea/
+*.swp
+*.swo
+
+# Python packaging
+*.egg-info/
+*.egg
+dist/
+build/
+
+# Mypy
+.mypy_cache/
+
+# pytest
+.pytest_cache/
+
+# Logs
+*.log
+
+# OS files
+.DS_Store
+Thumbs.db
