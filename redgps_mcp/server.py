@@ -1,6 +1,4 @@
 #!/usr/bin/env python3
-# server.py — MCP Server RedGPS
-
 import os
 import uvicorn
 from dotenv import load_dotenv
@@ -8,19 +6,17 @@ from mcp.server.fastmcp import FastMCP
 from tools.clientes import registrar_tools_clientes
 from tools.veiculos import registrar_tools_veiculos
 from starlette.middleware.base import BaseHTTPMiddleware
-from starlette.applications import Starlette
 
-# ─── Middleware para corrigir o Host header do ngrok ─────────────────────────
+load_dotenv()
+
 class FixHostMiddleware(BaseHTTPMiddleware):
     async def dispatch(self, request, call_next):
-        # Substitui o host pelo localhost para o FastMCP aceitar
         request.scope["headers"] = [
             (k, b"localhost:8000") if k == b"host" else (k, v)
             for k, v in request.scope["headers"]
         ]
         return await call_next(request)
 
-# ─── Inicializa o servidor MCP ────────────────────────────────────────────────
 mcp = FastMCP(
     name="RedGPS",
     instructions="""
@@ -41,14 +37,14 @@ mcp = FastMCP(
     json_response=True,
 )
 
-# ─── Registra as tools ────────────────────────────────────────────────────────
 registrar_tools_clientes(mcp)
 registrar_tools_veiculos(mcp)
 
-# ─── Inicia o servidor ────────────────────────────────────────────────────────
-if __name__ == "__main__":
-    load_dotenv()
+# app no nível do módulo — necessário para importação
+app = mcp.streamable_http_app()
+app.add_middleware(FixHostMiddleware)
 
+if __name__ == "__main__":
     apikey = os.getenv("REDGPS_APIKEY", "")
     if not apikey or apikey == "seu_token_aqui":
         print("⚠️  ATENÇÃO: Configure seu REDGPS_APIKEY no arquivo .env!")
@@ -56,17 +52,13 @@ if __name__ == "__main__":
         print(f"✅ Token configurado: {apikey[:8]}...")
 
     print("🚀 Iniciando RedGPS MCP Server...")
-    print("📡 http://0.0.0.0:8000/mcp")
-    print("-" * 50)
 
-    # Aplica o middleware no app do FastMCP
-    app = mcp.streamable_http_app()
-    app.add_middleware(FixHostMiddleware)
+    port = int(os.environ.get("PORT", 8000))
 
     uvicorn.run(
         app,
         host="0.0.0.0",
-        port=8000,
+        port=port,
         forwarded_allow_ips="*",
         proxy_headers=True,
     )
