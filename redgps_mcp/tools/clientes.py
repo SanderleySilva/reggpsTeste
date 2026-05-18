@@ -1,125 +1,220 @@
 # tools/clientes.py
-# Tools MCP relacionadas a Clientes
 
 from mcp.server.fastmcp import FastMCP
 from utils.api_client import post, tratar_erro
+import json
+
+
+def formatar_valor(valor):
+    if isinstance(valor, bool):
+        return "✅ Sim" if valor else "❌ Não"
+
+    if valor is None:
+        return "N/A"
+
+    if isinstance(valor, (dict, list)):
+        return json.dumps(valor, ensure_ascii=False, indent=2)
+
+    return str(valor)
+
+
+def gerar_markdown_objeto(obj: dict, titulo: str):
+    linhas = [f"## {titulo}\n"]
+
+    for chave, valor in obj.items():
+        linhas.append(f"- **{chave}:** {formatar_valor(valor)}")
+
+    return "\n".join(linhas)
 
 
 def registrar_tools_clientes(mcp: FastMCP):
 
     @mcp.tool(name="listar_clientes")
-    async def listar_clientes() -> str:
+    async def listar_clientes(
+        incluir_json_completo: bool = False
+    ) -> str:
         """
         Lista todos os clientes cadastrados na plataforma RedGPS.
-        Use quando o usuário perguntar sobre clientes, contas ou empresas cadastradas.
+
+        Args:
+            incluir_json_completo:
+                Se True, retorna também todos os campos completos da API.
         """
+
         try:
             resultado = await post("getClients")
 
             if resultado.get("status") != 200:
-                return f"⚠️ API retornou status {resultado.get('status')}: {resultado}"
+                return (
+                    f"⚠️ API retornou status "
+                    f"{resultado.get('status')}\n\n"
+                    f"{json.dumps(resultado, indent=2, ensure_ascii=False)}"
+                )
 
             clientes = resultado.get("data", [])
+
             if not clientes:
                 return "Nenhum cliente encontrado."
 
             linhas = [
-                f"📋 **Total de clientes: {len(clientes)}**\n",
-                "| # | Nome | ID | Status |",
-                "|---|------|----|--------|"
+                f"# 📋 Clientes encontrados: {len(clientes)}\n"
             ]
-            for i, c in enumerate(clientes, 1):
-                nome   = c.get("name") or c.get("nombre") or c.get("client_name") or "N/A"
-                id_c   = c.get("id") or c.get("idclient") or "N/A"
-                status = "✅ Ativo" if c.get("active") or c.get("status") == 1 else "⛔ Inativo"
-                linhas.append(f"| {i} | {nome} | {id_c} | {status} |")
+
+            for i, cliente in enumerate(clientes, 1):
+
+                nome = (
+                    cliente.get("name")
+                    or cliente.get("nombre")
+                    or cliente.get("client_name")
+                    or "N/A"
+                )
+
+                id_cliente = (
+                    cliente.get("id")
+                    or cliente.get("idclient")
+                    or "N/A"
+                )
+
+                ativo = (
+                    cliente.get("active") is True
+                    or cliente.get("status") == 1
+                )
+
+                status = "✅ Ativo" if ativo else "⛔ Inativo"
+
+                linhas.extend([
+                    f"## Cliente {i}",
+                    f"- **Nome:** {nome}",
+                    f"- **ID:** {id_cliente}",
+                    f"- **Status:** {status}",
+                ])
+
+                # Retorna TODOS os campos disponíveis
+                if incluir_json_completo:
+                    linhas.append("\n### JSON Completo")
+                    linhas.append("```json")
+                    linhas.append(
+                        json.dumps(
+                            cliente,
+                            indent=2,
+                            ensure_ascii=False
+                        )
+                    )
+                    linhas.append("```")
+
+                linhas.append("")
 
             return "\n".join(linhas)
 
         except Exception as e:
             return tratar_erro(e)
 
-
     @mcp.tool(name="dados_cliente")
-    async def dados_cliente() -> str:
+    async def dados_cliente(
+        incluir_json_completo: bool = True
+    ) -> str:
         """
-        Retorna os dados detalhados do cliente/conta associado ao token atual.
-        Use quando o usuário perguntar sobre os dados da sua conta, empresa ou perfil.
+        Retorna todos os dados detalhados do cliente atual.
         """
+
         try:
             resultado = await post("getClientData")
 
             if resultado.get("status") != 200:
-                return f"⚠️ API retornou status {resultado.get('status')}: {resultado}"
+                return (
+                    f"⚠️ API retornou status "
+                    f"{resultado.get('status')}\n\n"
+                    f"{json.dumps(resultado, indent=2, ensure_ascii=False)}"
+                )
 
             dados = resultado.get("data", {})
+
             if not dados:
-                return "Nenhum dado encontrado para este cliente."
+                return "Nenhum dado encontrado."
 
-            # Formata os campos disponíveis de forma legível
-            linhas = ["📄 **Dados do Cliente:**\n"]
-            campos_legíveis = {
-                "name": "Nome",
-                "nombre": "Nome",
-                "email": "E-mail",
-                "phone": "Telefone",
-                "country": "País",
-                "city": "Cidade",
-                "address": "Endereço",
-                "active": "Ativo",
-                "status": "Status",
-                "id": "ID",
-                "idclient": "ID do Cliente",
-                "max_assets": "Máx. Ativos",
-                "assets_count": "Total de Ativos",
-            }
-            for chave, label in campos_legíveis.items():
-                if chave in dados:
-                    valor = dados[chave]
-                    if isinstance(valor, bool) or chave == "active":
-                        valor = "✅ Sim" if valor else "❌ Não"
-                    linhas.append(f"- **{label}:** {valor}")
+            resposta = gerar_markdown_objeto(
+                dados,
+                "📄 Dados do Cliente"
+            )
 
-            return "\n".join(linhas)
+            if incluir_json_completo:
+                resposta += "\n\n## JSON Completo\n```json\n"
+                resposta += json.dumps(
+                    dados,
+                    indent=2,
+                    ensure_ascii=False
+                )
+                resposta += "\n```"
+
+            return resposta
 
         except Exception as e:
             return tratar_erro(e)
 
-
     @mcp.tool(name="meu_usuario")
-    async def meu_usuario() -> str:
+    async def meu_usuario(
+        incluir_json_completo: bool = True
+    ) -> str:
         """
-        Retorna as informações do usuário autenticado com o token atual.
-        Use quando o usuário perguntar sobre seu próprio perfil, usuário ou conta.
+        Retorna todas as informações do usuário autenticado.
         """
+
         try:
             resultado = await post("getMyUser")
 
             if resultado.get("status") != 200:
-                return f"⚠️ API retornou status {resultado.get('status')}: {resultado}"
+                return (
+                    f"⚠️ API retornou status "
+                    f"{resultado.get('status')}\n\n"
+                    f"{json.dumps(resultado, indent=2, ensure_ascii=False)}"
+                )
 
             dados = resultado.get("data", {})
+
             if not dados:
-                return "Nenhuma informação de usuário encontrada."
+                return "Nenhuma informação encontrada."
 
-            linhas = ["👤 **Meu Usuário:**\n"]
-            campos = {
-                "username": "Usuário",
-                "name": "Nome",
-                "email": "E-mail",
-                "phone": "Telefone",
-                "role": "Perfil/Role",
-                "active": "Ativo",
-                "idclient": "ID do Cliente",
-            }
-            for chave, label in campos.items():
-                if chave in dados:
-                    valor = dados[chave]
-                    if chave == "active":
-                        valor = "✅ Sim" if valor else "❌ Não"
-                    linhas.append(f"- **{label}:** {valor}")
+            resposta = gerar_markdown_objeto(
+                dados,
+                "👤 Meu Usuário"
+            )
 
-            return "\n".join(linhas)
+            if incluir_json_completo:
+                resposta += "\n\n## JSON Completo\n```json\n"
+                resposta += json.dumps(
+                    dados,
+                    indent=2,
+                    ensure_ascii=False
+                )
+                resposta += "\n```"
+
+            return resposta
+
+        except Exception as e:
+            return tratar_erro(e)
+
+    @mcp.tool(name="consultar_endpoint_clientes")
+    async def consultar_endpoint_clientes(
+        endpoint: str,
+        payload: dict = {}
+    ) -> str:
+        """
+        Consulta qualquer endpoint relacionado a clientes.
+
+        Exemplos:
+        - getClients
+        - getClientData
+        - getMyUser
+        """
+
+        try:
+            resultado = await post(endpoint, payload)
+
+            return json.dumps(
+                resultado,
+                indent=2,
+                ensure_ascii=False
+            )
 
         except Exception as e:
             return tratar_erro(e)
