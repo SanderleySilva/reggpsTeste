@@ -1,246 +1,502 @@
 # tools/veiculos.py
 # Tools MCP relacionadas a Veículos
 
+from datetime import datetime
+from typing import Any, Dict, List
+
+import asyncio
+
 from mcp.server.fastmcp import FastMCP
-from pydantic import BaseModel, Field
+from pydantic import BaseModel, Field, field_validator
+
 from utils.api_client import post, tratar_erro
 
 
+# =========================================================
+# HELPERS
+# =========================================================
+
+TIMEOUT_API = 15
+MAX_REGISTROS = 50
+MAX_VEICULOS = 100
+
+
+async def executar_post(endpoint: str, payload: Dict[str, Any] | None = None):
+    """
+    Executa chamadas à API com timeout e validação padrão.
+    """
+    resultado = await asyncio.wait_for(
+        post(endpoint, payload),
+        timeout=TIMEOUT_API
+    )
+
+    if resultado.get("status") != 200:
+        raise Exception(
+            f"API retornou status {resultado.get('status')}: {resultado}"
+        )
+
+    return resultado.get("data", [])
+
+
+def gerar_maps_url(lat, lon) -> str:
+    """
+    Gera URL do Google Maps apenas se latitude/longitude forem válidas.
+    """
+    if lat in [None, "", "N/A"] or lon in [None, "", "N/A"]:
+        return ""
+
+    return f"https://maps.google.com/?q={lat},{lon}"
+
+
+def status_ativo(veiculo: Dict[str, Any]) -> str:
+    """
+    Determina status ativo do veículo.
+    """
+    try:
+        status = int(veiculo.get("status", 0))
+        return "✅" if status == 1 else "⛔"
+    except Exception:
+        return "⛔"
+
+
+def limitar_lista(lista: List[Any], limite: int):
+    """
+    Limita quantidade de registros.
+    """
+    return lista[:limite]
+
+
+# =========================================================
+# VALIDADORES
+# =========================================================
+
+class BuscarVeiculoInput(BaseModel):
+    nome_ou_placa: str = Field(
+        ...,
+        description="Nome, placa ou identificador do veículo"
+    )
+
+    @field_validator("nome_ou_placa")
+    @classmethod
+    def validar_nome(cls, value):
+        value = value.strip()
+
+        if not value:
+            raise ValueError("Informe um nome ou placa válida.")
+
+        return value
+
+
+class OdometroInput(BaseModel):
+    id_veiculo: str = Field(
+        ...,
+        description="ID do veículo para consultar o odômetro"
+    )
+
+
+class HistoricoEventosInput(BaseModel):
+    id_veiculo: str = Field(..., description="ID do veículo")
+    data_inicio: str = Field(..., description="Data início YYYY-MM-DD")
+    data_fim: str = Field(..., description="Data fim YYYY-MM-DD")
+
+    @field_validator("data_inicio", "data_fim")
+    @classmethod
+    def validar_data(cls, value):
+        datetime.strptime(value, "%Y-%m-%d")
+        return value
+
+
+class HistoricoPosicaoInput(BaseModel):
+    id_veiculo: str = Field(..., description="ID do veículo")
+
+    data_inicio: str = Field(
+        ...,
+        description="Data/hora início YYYY-MM-DD HH:MM:SS"
+    )
+
+    data_fim: str = Field(
+        ...,
+        description="Data/hora fim YYYY-MM-DD HH:MM:SS"
+    )
+
+    @field_validator("data_inicio", "data_fim")
+    @classmethod
+    def validar_data_hora(cls, value):
+        datetime.strptime(value, "%Y-%m-%d %H:%M:%S")
+        return value
+
+
+# =========================================================
+# REGISTRO DAS TOOLS
+# =========================================================
+
 def registrar_tools_veiculos(mcp: FastMCP):
+
+    # =====================================================
+    # LISTAR VEÍCULOS
+    # =====================================================
 
     @mcp.tool(name="listar_veiculos")
     async def listar_veiculos() -> str:
         """
-        Lista todos os veículos cadastrados e atribuídos ao usuário.
-        Use quando o usuário perguntar sobre veículos, frota, ativos ou equipamentos GPS cadastrados.
+        Lista todos os veículos cadastrados.
         """
+
         try:
-            resultado = await post("vehicleGetAll")
-            if resultado.get("status") != 200:
-                return f"⚠️ API retornou status {resultado.get('status')}: {resultado}"
-            veiculos = resultado.get("data", [])
+            veiculos = await executar_post("vehicleGetAll")
+
             if not veiculos:
-                return "Nenhum veículo encontrado na sua conta."
-            linhas = [f"🚗 **Total de veículos: {len(veiculos)}**\n", "| # | Nome/Placa | ID | Ativo |", "|---|------------|----|-------|"]
-            for i, v in enumerate(veiculos, 1):
-                nome  = v.get("name") or v.get("plate") or "N/A"
-                id_v  = v.get("id") or v.get("idasset") or "N/A"
-                ativo = "✅" if v.get("active") or v.get("status") == 1 else "⛔"
-                linhas.append(f"| {i} | {nome} | {id_v} | {ativo} |")
+                return "Nenhum veículo encontrado."
+
+            linhas = [
+                f"🚗 **Total de veículos: {len(veiculos)}**\n",
+                "| # | Nome/Placa | ID | Ativo |",
+                "|---|---|---|---|"
+            ]
+
+            for i, v in enumerate(
+                limitar_lista(veiculos, MAX_VEICULOS),
+                start=1
+            ):
+
+                nome = (
+                    v.get("name")
+                    or v.get("plate")
+                    or "N/A"
+                )
+
+                id_v = (
+                    v.get("id")
+                    or v.get("idasset")
+                    or "N/A"
+                )
+
+                ativo = status_ativo(v)
+
+                linhas.append(
+                    f"| {i} | {nome} | {id_v} | {ativo} |"
+                )
+
             return "\n".join(linhas)
+
         except Exception as e:
             return tratar_erro(e)
 
+    # =====================================================
+    # LISTAR VEÍCULOS COMPLETO
+    # =====================================================
 
     @mcp.tool(name="listar_veiculos_completo")
     async def listar_veiculos_completo() -> str:
         """
-        Lista todos os veículos com informações completas: marca, modelo, ano, cor, placa e sensores.
-        Use quando precisar de detalhes técnicos dos veículos da frota.
+        Lista veículos com detalhes completos.
         """
+
         try:
-            resultado = await post("vehicleGetAllComplete")
-            if resultado.get("status") != 200:
-                return f"⚠️ API retornou status {resultado.get('status')}: {resultado}"
-            veiculos = resultado.get("data", [])
+            veiculos = await executar_post("vehicleGetAllComplete")
+
             if not veiculos:
                 return "Nenhum veículo encontrado."
-            linhas = [f"🚗 **Veículos — Informações Completas ({len(veiculos)} total)**\n"]
-            for v in veiculos:
-                nome   = v.get("name") or v.get("plate") or "N/A"
-                marca  = v.get("brand") or "N/A"
-                modelo = v.get("model") or "N/A"
-                ano    = v.get("year") or "N/A"
-                cor    = v.get("color") or "N/A"
-                placa  = v.get("plate") or "N/A"
-                linhas.append(f"---\n**{nome}**\n- Placa: {placa} | Marca: {marca} | Modelo: {modelo} | Ano: {ano} | Cor: {cor}")
+
+            linhas = [
+                f"🚗 **Veículos — Informações Completas ({len(veiculos)} total)**\n"
+            ]
+
+            for v in limitar_lista(veiculos, MAX_VEICULOS):
+
+                nome = v.get("name") or "N/A"
+
+                linhas.append(
+                    "\n".join([
+                        "---",
+                        f"**{nome}**",
+                        f"- Placa: {v.get('plate', 'N/A')}",
+                        f"- Marca: {v.get('brand', 'N/A')}",
+                        f"- Modelo: {v.get('model', 'N/A')}",
+                        f"- Ano: {v.get('year', 'N/A')}",
+                        f"- Cor: {v.get('color', 'N/A')}",
+                    ])
+                )
+
             return "\n".join(linhas)
+
         except Exception as e:
             return tratar_erro(e)
 
+    # =====================================================
+    # LOCALIZAÇÃO DOS VEÍCULOS
+    # =====================================================
 
     @mcp.tool(name="localizacao_veiculos")
     async def localizacao_veiculos() -> str:
         """
-        Retorna a localização em tempo real de todos os veículos da frota.
-        Use quando o usuário perguntar onde estão os veículos, localização, posição atual,
-        velocidade, ignição, condutor ou último reporte dos rastreadores GPS.
+        Retorna localização em tempo real.
         """
+
         try:
-            resultado = await post("getdata")
-            if resultado.get("status") != 200:
-                return f"⚠️ API retornou status {resultado.get('status')}: {resultado}"
-            veiculos = resultado.get("data", [])
+            veiculos = await executar_post("getdata")
+
             if not veiculos:
                 return "Nenhum dado de localização encontrado."
-            linhas = [f"📡 **Localização em Tempo Real — {len(veiculos)} veículo(s)**\n"]
-            for v in veiculos:
-                nome       = v.get("name") or v.get("device") or "N/A"
-                lat        = v.get("latitude", "N/A")
-                lon        = v.get("longitude", "N/A")
+
+            linhas = [
+                f"📡 **Localização em Tempo Real — {len(veiculos)} veículo(s)**\n"
+            ]
+
+            for v in limitar_lista(veiculos, MAX_VEICULOS):
+
+                nome = v.get("name") or v.get("device") or "N/A"
+
+                lat = v.get("latitude")
+                lon = v.get("longitude")
+
                 velocidade = v.get("speed", 0)
-                ignicao    = v.get("ignition", 0)
-                data       = v.get("date", "N/A")
-                hora       = v.get("time", "N/A")
-                geo        = v.get("geo") or v.get("address") or ""
-                odometro   = v.get("odometer", "N/A")
-                condutor   = v.get("driver") or "Não identificado"
-                evento     = v.get("event") or "N/A"
-                maps_url   = f"https://maps.google.com/?q={lat},{lon}" if lat != "N/A" else ""
-                linhas.append(f"---\n**🚗 {nome}**")
-                linhas.append(f"- Ignição: {'🔑 Ligado' if ignicao else '⭕ Desligado'}")
-                linhas.append(f"- Velocidade: {velocidade} km/h | Evento: {evento}")
-                linhas.append(f"- Condutor: {condutor} | Odômetro: {odometro} km")
-                linhas.append(f"- Último reporte: {data} às {hora}")
-                if geo:
-                    linhas.append(f"- Local: {geo}")
+
+                ignicao = "🔑 Ligado" if v.get("ignition") else "⭕ Desligado"
+
+                geo = v.get("geo") or v.get("address") or "Local não informado"
+
+                maps_url = gerar_maps_url(lat, lon)
+
+                linhas.extend([
+                    "---",
+                    f"**🚗 {nome}**",
+                    f"- Ignição: {ignicao}",
+                    f"- Velocidade: {velocidade} km/h",
+                    f"- Evento: {v.get('event', 'N/A')}",
+                    f"- Condutor: {v.get('driver', 'Não identificado')}",
+                    f"- Odômetro: {v.get('odometer', 'N/A')} km",
+                    f"- Último reporte: {v.get('date', 'N/A')} às {v.get('time', 'N/A')}",
+                    f"- Local: {geo}",
+                ])
+
                 if maps_url:
                     linhas.append(f"- Mapa: {maps_url}")
+
             return "\n".join(linhas)
+
         except Exception as e:
             return tratar_erro(e)
 
-
-    class BuscarVeiculoInput(BaseModel):
-        nome_ou_placa: str = Field(..., description="Nome, placa ou identificador do veículo")
+    # =====================================================
+    # BUSCAR VEÍCULO
+    # =====================================================
 
     @mcp.tool(name="buscar_veiculo")
     async def buscar_veiculo(params: BuscarVeiculoInput) -> str:
         """
-        Busca um veículo específico pelo nome ou placa e retorna sua localização atual.
-        Use quando o usuário perguntar sobre um veículo específico pelo nome ou placa.
+        Busca veículo por nome ou placa.
         """
+
         try:
-            resultado = await post("getdata")
-            if resultado.get("status") != 200:
-                return f"⚠️ API retornou status {resultado.get('status')}: {resultado}"
-            veiculos    = resultado.get("data", [])
-            termo       = params.nome_ou_placa.lower()
-            encontrados = [v for v in veiculos if termo in str(v.get("name", "")).lower() or termo in str(v.get("plate", "")).lower()]
+            veiculos = await executar_post("getdata")
+
+            termo = params.nome_ou_placa.lower()
+
+            encontrados = [
+                v for v in veiculos
+                if termo in str(v.get("name", "")).lower()
+                or termo in str(v.get("plate", "")).lower()
+            ]
+
             if not encontrados:
                 return f"Nenhum veículo encontrado com '{params.nome_ou_placa}'."
-            linhas = [f"🔍 **{len(encontrados)} veículo(s) encontrado(s):**\n"]
+
+            linhas = [
+                f"🔍 **{len(encontrados)} veículo(s) encontrado(s):**\n"
+            ]
+
             for v in encontrados:
-                nome       = v.get("name") or v.get("device") or "N/A"
-                lat        = v.get("latitude", "N/A")
-                lon        = v.get("longitude", "N/A")
-                velocidade = v.get("speed", 0)
-                ignicao    = v.get("ignition", 0)
-                data       = v.get("date", "N/A")
-                hora       = v.get("time", "N/A")
-                geo        = v.get("geo") or v.get("address") or ""
-                maps_url   = f"https://maps.google.com/?q={lat},{lon}" if lat != "N/A" else ""
-                linhas.append(f"**🚗 {nome}**")
-                linhas.append(f"- Ignição: {'🔑 Ligado' if ignicao else '⭕ Desligado'} | Velocidade: {velocidade} km/h")
-                linhas.append(f"- Último reporte: {data} às {hora}")
+
+                nome = v.get("name") or v.get("device") or "N/A"
+
+                lat = v.get("latitude")
+                lon = v.get("longitude")
+
+                maps_url = gerar_maps_url(lat, lon)
+
+                linhas.extend([
+                    f"**🚗 {nome}**",
+                    f"- Ignição: {'🔑 Ligado' if v.get('ignition') else '⭕ Desligado'}",
+                    f"- Velocidade: {v.get('speed', 0)} km/h",
+                    f"- Último reporte: {v.get('date', 'N/A')} às {v.get('time', 'N/A')}",
+                ])
+
+                geo = v.get("geo") or v.get("address")
+
                 if geo:
                     linhas.append(f"- Local: {geo}")
+
                 if maps_url:
                     linhas.append(f"- Mapa: {maps_url}")
+
+                linhas.append("")
+
             return "\n".join(linhas)
+
         except Exception as e:
             return tratar_erro(e)
 
-
-    class OdometroInput(BaseModel):
-        id_veiculo: str = Field(..., description="ID do veículo para consultar o odômetro")
+    # =====================================================
+    # CONSULTAR ODÔMETRO
+    # =====================================================
 
     @mcp.tool(name="consultar_odometro")
     async def consultar_odometro(params: OdometroInput) -> str:
         """
-        Consulta o odômetro de um veículo específico pelo ID.
-        Use quando o usuário perguntar sobre quilometragem, km rodados ou odômetro.
+        Consulta odômetro do veículo.
         """
+
         try:
-            resultado = await post("getOdometer", {"idasset": params.id_veiculo})
-            if resultado.get("status") != 200:
-                return f"⚠️ API retornou status {resultado.get('status')}: {resultado}"
-            dados = resultado.get("data", {})
-            return f"🔢 **Odômetro do veículo {params.id_veiculo}:**\n- Total: {dados.get('odometer', 'N/A')} km"
+            dados = await executar_post(
+                "getOdometer",
+                {"idasset": params.id_veiculo}
+            )
+
+            if isinstance(dados, list):
+                dados = dados[0] if dados else {}
+
+            return (
+                f"🔢 **Odômetro do veículo {params.id_veiculo}:**\n"
+                f"- Total: {dados.get('odometer', 'N/A')} km"
+            )
+
         except Exception as e:
             return tratar_erro(e)
 
-
-    class HistoricoEventosInput(BaseModel):
-        id_veiculo: str  = Field(..., description="ID do veículo")
-        data_inicio: str = Field(..., description="Data início (YYYY-MM-DD)")
-        data_fim: str    = Field(..., description="Data fim (YYYY-MM-DD)")
+    # =====================================================
+    # HISTÓRICO DE EVENTOS
+    # =====================================================
 
     @mcp.tool(name="historico_eventos")
-    async def historico_eventos(params: HistoricoEventosInput) -> str:
+    async def historico_eventos(
+        params: HistoricoEventosInput
+    ) -> str:
         """
-        Consulta o histórico de eventos (alertas, paradas, ignição) de um veículo em um período.
-        Use quando o usuário perguntar sobre eventos, alertas ou histórico de um veículo.
+        Consulta histórico de eventos.
         """
+
         try:
-            resultado = await post("historyGetEvents", {
-                "idasset": params.id_veiculo,
-                "date_begin": params.data_inicio,
-                "date_end": params.data_fim,
-            })
-            if resultado.get("status") != 200:
-                return f"⚠️ API retornou status {resultado.get('status')}: {resultado}"
-            eventos = resultado.get("data", [])
+            eventos = await executar_post(
+                "historyGetEvents",
+                {
+                    "idasset": params.id_veiculo,
+                    "date_begin": params.data_inicio,
+                    "date_end": params.data_fim,
+                }
+            )
+
             if not eventos:
-                return f"Nenhum evento encontrado para o período {params.data_inicio} a {params.data_fim}."
-            linhas = [f"📋 **Histórico de Eventos — {len(eventos)} evento(s)**\n"]
-            for e in eventos[:50]:
-                linhas.append(f"- {e.get('date')} {e.get('time')} | {e.get('event', 'N/A')} | Vel: {e.get('speed', 0)} km/h")
+                return (
+                    f"Nenhum evento encontrado entre "
+                    f"{params.data_inicio} e {params.data_fim}."
+                )
+
+            linhas = [
+                f"📋 **Histórico de Eventos — {len(eventos)} evento(s)**\n"
+            ]
+
+            for e in limitar_lista(eventos, MAX_REGISTROS):
+
+                linhas.append(
+                    f"- {e.get('date')} {e.get('time')} | "
+                    f"{e.get('event', 'N/A')} | "
+                    f"Vel: {e.get('speed', 0)} km/h"
+                )
+
+            if len(eventos) > MAX_REGISTROS:
+                linhas.append(
+                    f"\n_... e mais {len(eventos) - MAX_REGISTROS} eventos._"
+                )
+
             return "\n".join(linhas)
+
         except Exception as e:
             return tratar_erro(e)
 
-
-    class HistoricoPosicaoInput(BaseModel):
-        id_veiculo: str  = Field(..., description="ID do veículo")
-        data_inicio: str = Field(..., description="Data/hora início (YYYY-MM-DD HH:MM:SS)")
-        data_fim: str    = Field(..., description="Data/hora fim (YYYY-MM-DD HH:MM:SS)")
+    # =====================================================
+    # HISTÓRICO DE POSIÇÕES
+    # =====================================================
 
     @mcp.tool(name="historico_posicoes")
-    async def historico_posicoes(params: HistoricoPosicaoInput) -> str:
+    async def historico_posicoes(
+        params: HistoricoPosicaoInput
+    ) -> str:
         """
-        Consulta o histórico de posições GPS de um veículo em um período de tempo.
-        Use quando o usuário perguntar sobre rota percorrida, trajeto ou posições históricas.
+        Consulta histórico de posições GPS.
         """
+
         try:
-            resultado = await post("historyGet", {
-                "idasset": params.id_veiculo,
-                "date_begin": params.data_inicio,
-                "date_end": params.data_fim,
-            })
-            if resultado.get("status") != 200:
-                return f"⚠️ API retornou status {resultado.get('status')}: {resultado}"
-            posicoes = resultado.get("data", [])
+            posicoes = await executar_post(
+                "historyGet",
+                {
+                    "idasset": params.id_veiculo,
+                    "date_begin": params.data_inicio,
+                    "date_end": params.data_fim,
+                }
+            )
+
             if not posicoes:
-                return "Nenhuma posição encontrada para o período informado."
-            linhas = [f"📍 **Histórico de Posições — {len(posicoes)} registro(s)**\n"]
-            for p in posicoes[:50]:
-                lat = p.get("latitude", "N/A")
-                lon = p.get("longitude", "N/A")
-                linhas.append(f"- {p.get('date')} {p.get('time')} | Vel: {p.get('speed', 0)} km/h | [{lat}, {lon}]")
-            if len(posicoes) > 50:
-                linhas.append(f"\n_... e mais {len(posicoes) - 50} registros._")
+                return "Nenhuma posição encontrada."
+
+            linhas = [
+                f"📍 **Histórico de Posições — {len(posicoes)} registro(s)**\n"
+            ]
+
+            for p in limitar_lista(posicoes, MAX_REGISTROS):
+
+                linhas.append(
+                    f"- {p.get('date')} {p.get('time')} | "
+                    f"Vel: {p.get('speed', 0)} km/h | "
+                    f"[{p.get('latitude', 'N/A')}, {p.get('longitude', 'N/A')}]"
+                )
+
+            if len(posicoes) > MAX_REGISTROS:
+                linhas.append(
+                    f"\n_... e mais {len(posicoes) - MAX_REGISTROS} registros._"
+                )
+
             return "\n".join(linhas)
+
         except Exception as e:
             return tratar_erro(e)
 
+    # =====================================================
+    # MARCAS E MODELOS
+    # =====================================================
 
     @mcp.tool(name="listar_marcas_modelos")
     async def listar_marcas_modelos() -> str:
         """
-        Lista todas as marcas e modelos de veículos disponíveis na plataforma.
-        Use quando o usuário perguntar sobre marcas ou modelos disponíveis.
+        Lista marcas e modelos disponíveis.
         """
+
         try:
-            resultado = await post("getBrandsAndModels")
-            if resultado.get("status") != 200:
-                return f"⚠️ API retornou status {resultado.get('status')}: {resultado}"
-            dados  = resultado.get("data", [])
+            dados = await executar_post("getBrandsAndModels")
+
+            if not dados:
+                return "Nenhuma marca/modelo encontrado."
+
             linhas = ["🚘 **Marcas e Modelos Disponíveis:**\n"]
-            for marca in dados[:30]:
-                nome    = marca.get("name") or marca.get("brand") or "N/A"
+
+            for marca in limitar_lista(dados, 30):
+
+                nome = marca.get("name") or marca.get("brand") or "N/A"
+
                 modelos = marca.get("models") or []
-                linhas.append(f"**{nome}**: {', '.join([m.get('name', '') for m in modelos[:5]])}")
+
+                nomes_modelos = [
+                    m.get("name", "")
+                    for m in modelos[:10]
+                    if m.get("name")
+                ]
+
+                linhas.append(
+                    f"**{nome}**: "
+                    f"{', '.join(nomes_modelos) if nomes_modelos else 'Sem modelos'}"
+                )
+
             return "\n".join(linhas)
+
         except Exception as e:
             return tratar_erro(e)
