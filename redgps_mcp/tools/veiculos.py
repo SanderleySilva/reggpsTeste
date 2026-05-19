@@ -66,6 +66,90 @@ def limitar_lista(lista: List[Any], limite: int):
     return lista[:limite]
 
 
+def get_nome_veiculo(v: Dict[str, Any]) -> str:
+    """
+    Retorna o nome/identificação do veículo tentando múltiplos campos.
+    A API RedGPS usa campos em espanhol: 'nombre', 'patente', 'name', 'plate', 'device'.
+    """
+    return (
+        v.get("nombre")        # vehicleGetAll
+        or v.get("name")       # getdata
+        or v.get("patente")    # vehicleGetAll (placa)
+        or v.get("plate")      # getdata
+        or v.get("device")     # getdata (fallback)
+        or "N/A"
+    )
+
+
+def get_placa(v: Dict[str, Any]) -> str:
+    """
+    Retorna a placa tentando campos em espanhol e inglês.
+    """
+    return v.get("patente") or v.get("plate") or "N/A"
+
+
+def get_marca(v: Dict[str, Any]) -> str:
+    """
+    Retorna a marca do veículo.
+    """
+    return v.get("marca") or v.get("brand") or "N/A"
+
+
+def get_modelo(v: Dict[str, Any]) -> str:
+    """
+    Retorna o modelo do veículo.
+    """
+    return v.get("modelo") or v.get("model") or "N/A"
+
+
+def get_ano(v: Dict[str, Any]) -> str:
+    """
+    Retorna o ano do veículo. '0' é tratado como não informado.
+    """
+    ano = v.get("anio") or v.get("year") or "N/A"
+    return "N/A" if str(ano) == "0" else str(ano)
+
+
+def get_cor(v: Dict[str, Any]) -> str:
+    """
+    Retorna a cor do veículo.
+    """
+    return v.get("color") or "N/A"
+
+
+def get_id_veiculo(v: Dict[str, Any]) -> str:
+    """
+    Retorna o ID do veículo tentando múltiplos campos.
+    """
+    return (
+        str(v.get("id") or "")
+        or str(v.get("idasset") or "")
+        or str(v.get("asset") or "")
+        or "N/A"
+    )
+
+
+def get_condutor(v: Dict[str, Any]) -> str:
+    """
+    Retorna o condutor (campo em espanhol ou inglês).
+    """
+    return v.get("conductor") or v.get("driver") or "Não identificado"
+
+
+def get_grupo(v: Dict[str, Any]) -> str:
+    """
+    Retorna o grupo do veículo.
+    """
+    return v.get("grupo") or v.get("group") or "N/A"
+
+
+def get_tipo(v: Dict[str, Any]) -> str:
+    """
+    Retorna o tipo do veículo.
+    """
+    return v.get("tipo_vehiculo") or v.get("type") or "N/A"
+
+
 # =========================================================
 # VALIDADORES
 # =========================================================
@@ -139,7 +223,8 @@ def registrar_tools_veiculos(mcp: FastMCP):
     @mcp.tool(name="listar_veiculos")
     async def listar_veiculos() -> str:
         """
-        Lista todos os veículos cadastrados.
+        Lista todos os veículos cadastrados e atribuídos ao usuário.
+        Use quando o usuário perguntar sobre veículos, frota, ativos ou equipamentos GPS cadastrados.
         """
 
         try:
@@ -150,31 +235,23 @@ def registrar_tools_veiculos(mcp: FastMCP):
 
             linhas = [
                 f"🚗 **Total de veículos: {len(veiculos)}**\n",
-                "| # | Nome/Placa | ID | Ativo |",
-                "|---|---|---|---|"
+                "| # | Nome | Placa | ID | Tipo | Grupo | Ativo |",
+                "|---|---|---|---|---|---|---|"
             ]
 
             for i, v in enumerate(
                 limitar_lista(veiculos, MAX_VEICULOS),
                 start=1
             ):
-
-                nome = (
-                    v.get("name")
-                    or v.get("plate")
-                    or "N/A"
-                )
-
-                id_v = (
-                    v.get("id")
-                    or v.get("idasset")
-                    or "N/A"
-                )
-
+                nome  = get_nome_veiculo(v)
+                placa = get_placa(v)
+                id_v  = get_id_veiculo(v)
+                tipo  = get_tipo(v)
+                grupo = get_grupo(v)
                 ativo = status_ativo(v)
 
                 linhas.append(
-                    f"| {i} | {nome} | {id_v} | {ativo} |"
+                    f"| {i} | {nome} | {placa} | {id_v} | {tipo} | {grupo} | {ativo} |"
                 )
 
             return "\n".join(linhas)
@@ -189,7 +266,8 @@ def registrar_tools_veiculos(mcp: FastMCP):
     @mcp.tool(name="listar_veiculos_completo")
     async def listar_veiculos_completo() -> str:
         """
-        Lista veículos com detalhes completos.
+        Lista veículos com detalhes completos: marca, modelo, ano, cor, placa e sensores.
+        Use quando precisar de detalhes técnicos dos veículos da frota.
         """
 
         try:
@@ -203,20 +281,45 @@ def registrar_tools_veiculos(mcp: FastMCP):
             ]
 
             for v in limitar_lista(veiculos, MAX_VEICULOS):
+                nome     = get_nome_veiculo(v)
+                placa    = get_placa(v)
+                marca    = get_marca(v)
+                modelo   = get_modelo(v)
+                ano      = get_ano(v)
+                cor      = get_cor(v)
+                id_v     = get_id_veiculo(v)
+                condutor = get_condutor(v)
+                grupo    = get_grupo(v)
+                tipo     = get_tipo(v)
+                ativo    = status_ativo(v)
 
-                nome = v.get("name") or "N/A"
+                bloco = [
+                    "---",
+                    f"**🚗 {nome}**",
+                    f"- ID: {id_v}",
+                    f"- Placa: {placa}",
+                    f"- Marca: {marca}",
+                    f"- Modelo: {modelo}",
+                    f"- Ano: {ano}",
+                    f"- Cor: {cor}",
+                    f"- Tipo: {tipo}",
+                    f"- Grupo: {grupo}",
+                    f"- Condutor: {condutor}",
+                    f"- Status: {ativo}",
+                ]
 
-                linhas.append(
-                    "\n".join([
-                        "---",
-                        f"**{nome}**",
-                        f"- Placa: {v.get('plate', 'N/A')}",
-                        f"- Marca: {v.get('brand', 'N/A')}",
-                        f"- Modelo: {v.get('model', 'N/A')}",
-                        f"- Ano: {v.get('year', 'N/A')}",
-                        f"- Cor: {v.get('color', 'N/A')}",
-                    ])
-                )
+                # Sensores (se existirem)
+                sensores = v.get("sensors") or v.get("sensores")
+                if sensores and isinstance(sensores, dict):
+                    nomes_sensores = [
+                        s.get("name") or k
+                        for k, s in sensores.items()
+                        if isinstance(s, dict) and (s.get("name") or k)
+                    ]
+                    if nomes_sensores:
+                        bloco.append(f"- Sensores: {', '.join(nomes_sensores[:5])}")
+
+                linhas.extend(bloco)
 
             return "\n".join(linhas)
 
@@ -230,7 +333,9 @@ def registrar_tools_veiculos(mcp: FastMCP):
     @mcp.tool(name="localizacao_veiculos")
     async def localizacao_veiculos() -> str:
         """
-        Retorna localização em tempo real.
+        Retorna a localização em tempo real de todos os veículos da frota.
+        Use quando o usuário perguntar onde estão os veículos, localização, posição atual,
+        velocidade, ignição, condutor ou último reporte dos rastreadores GPS.
         """
 
         try:
@@ -244,34 +349,48 @@ def registrar_tools_veiculos(mcp: FastMCP):
             ]
 
             for v in limitar_lista(veiculos, MAX_VEICULOS):
-
-                nome = v.get("name") or v.get("device") or "N/A"
+                nome  = get_nome_veiculo(v)
+                placa = get_placa(v)
 
                 lat = v.get("latitude")
                 lon = v.get("longitude")
 
                 velocidade = v.get("speed", 0)
+                ignicao    = "🔑 Ligado" if v.get("ignition") else "⭕ Desligado"
+                condutor   = get_condutor(v)
 
-                ignicao = "🔑 Ligado" if v.get("ignition") else "⭕ Desligado"
+                # Endereço: tenta 'geo', 'address', 'endereco'
+                geo = (
+                    v.get("geo")
+                    or v.get("address")
+                    or v.get("endereco")
+                    or "Local não informado"
+                )
 
-                geo = v.get("geo") or v.get("address") or "Local não informado"
+                odometro = v.get("odometer") or v.get("odometro") or "N/A"
+                evento   = v.get("event") or v.get("evento") or "N/A"
+
+                data_rep = v.get("date") or v.get("fecha") or "N/A"
+                hora_rep = v.get("time") or v.get("hora") or "N/A"
 
                 maps_url = gerar_maps_url(lat, lon)
 
-                linhas.extend([
+                bloco = [
                     "---",
-                    f"**🚗 {nome}**",
+                    f"**🚗 {nome}** | Placa: {placa}",
                     f"- Ignição: {ignicao}",
                     f"- Velocidade: {velocidade} km/h",
-                    f"- Evento: {v.get('event', 'N/A')}",
-                    f"- Condutor: {v.get('driver', 'Não identificado')}",
-                    f"- Odômetro: {v.get('odometer', 'N/A')} km",
-                    f"- Último reporte: {v.get('date', 'N/A')} às {v.get('time', 'N/A')}",
+                    f"- Evento: {evento}",
+                    f"- Condutor: {condutor}",
+                    f"- Odômetro: {odometro} km",
+                    f"- Último reporte: {data_rep} às {hora_rep}",
                     f"- Local: {geo}",
-                ])
+                ]
 
                 if maps_url:
-                    linhas.append(f"- Mapa: {maps_url}")
+                    bloco.append(f"- 🗺️ Mapa: {maps_url}")
+
+                linhas.extend(bloco)
 
             return "\n".join(linhas)
 
@@ -285,7 +404,8 @@ def registrar_tools_veiculos(mcp: FastMCP):
     @mcp.tool(name="buscar_veiculo")
     async def buscar_veiculo(params: BuscarVeiculoInput) -> str:
         """
-        Busca veículo por nome ou placa.
+        Busca um veículo específico pelo nome ou placa e retorna sua localização atual.
+        Use quando o usuário perguntar sobre um veículo específico pelo nome ou placa.
         """
 
         try:
@@ -295,8 +415,9 @@ def registrar_tools_veiculos(mcp: FastMCP):
 
             encontrados = [
                 v for v in veiculos
-                if termo in str(v.get("name", "")).lower()
-                or termo in str(v.get("plate", "")).lower()
+                if termo in str(get_nome_veiculo(v)).lower()
+                or termo in str(get_placa(v)).lower()
+                or termo in str(get_id_veiculo(v)).lower()
             ]
 
             if not encontrados:
@@ -307,30 +428,29 @@ def registrar_tools_veiculos(mcp: FastMCP):
             ]
 
             for v in encontrados:
-
-                nome = v.get("name") or v.get("device") or "N/A"
-
-                lat = v.get("latitude")
-                lon = v.get("longitude")
-
+                nome  = get_nome_veiculo(v)
+                placa = get_placa(v)
+                lat   = v.get("latitude")
+                lon   = v.get("longitude")
+                geo   = v.get("geo") or v.get("address") or "Local não informado"
                 maps_url = gerar_maps_url(lat, lon)
 
-                linhas.extend([
-                    f"**🚗 {nome}**",
+                data_rep = v.get("date") or v.get("fecha") or "N/A"
+                hora_rep = v.get("time") or v.get("hora") or "N/A"
+
+                bloco = [
+                    f"**🚗 {nome}** | Placa: {placa}",
                     f"- Ignição: {'🔑 Ligado' if v.get('ignition') else '⭕ Desligado'}",
                     f"- Velocidade: {v.get('speed', 0)} km/h",
-                    f"- Último reporte: {v.get('date', 'N/A')} às {v.get('time', 'N/A')}",
-                ])
-
-                geo = v.get("geo") or v.get("address")
-
-                if geo:
-                    linhas.append(f"- Local: {geo}")
+                    f"- Último reporte: {data_rep} às {hora_rep}",
+                    f"- Local: {geo}",
+                ]
 
                 if maps_url:
-                    linhas.append(f"- Mapa: {maps_url}")
+                    bloco.append(f"- 🗺️ Mapa: {maps_url}")
 
-                linhas.append("")
+                bloco.append("")
+                linhas.extend(bloco)
 
             return "\n".join(linhas)
 
@@ -344,7 +464,7 @@ def registrar_tools_veiculos(mcp: FastMCP):
     @mcp.tool(name="consultar_odometro")
     async def consultar_odometro(params: OdometroInput) -> str:
         """
-        Consulta odômetro do veículo.
+        Consulta o odômetro de um veículo específico pelo ID.
         """
 
         try:
@@ -356,9 +476,16 @@ def registrar_tools_veiculos(mcp: FastMCP):
             if isinstance(dados, list):
                 dados = dados[0] if dados else {}
 
+            odometro = (
+                dados.get("odometer")
+                or dados.get("odometro")
+                or dados.get("km")
+                or "N/A"
+            )
+
             return (
                 f"🔢 **Odômetro do veículo {params.id_veiculo}:**\n"
-                f"- Total: {dados.get('odometer', 'N/A')} km"
+                f"- Total: {odometro} km"
             )
 
         except Exception as e:
@@ -373,7 +500,8 @@ def registrar_tools_veiculos(mcp: FastMCP):
         params: HistoricoEventosInput
     ) -> str:
         """
-        Consulta histórico de eventos.
+        Consulta o histórico de eventos (alertas, paradas, ignição) de um veículo em um período.
+        Use quando o usuário perguntar sobre eventos, alertas ou histórico de um veículo.
         """
 
         try:
@@ -397,11 +525,13 @@ def registrar_tools_veiculos(mcp: FastMCP):
             ]
 
             for e in limitar_lista(eventos, MAX_REGISTROS):
+                data  = e.get("date") or e.get("fecha") or "N/A"
+                hora  = e.get("time") or e.get("hora") or "N/A"
+                event = e.get("event") or e.get("evento") or "N/A"
+                vel   = e.get("speed", 0)
 
                 linhas.append(
-                    f"- {e.get('date')} {e.get('time')} | "
-                    f"{e.get('event', 'N/A')} | "
-                    f"Vel: {e.get('speed', 0)} km/h"
+                    f"- {data} {hora} | {event} | Vel: {vel} km/h"
                 )
 
             if len(eventos) > MAX_REGISTROS:
@@ -423,7 +553,8 @@ def registrar_tools_veiculos(mcp: FastMCP):
         params: HistoricoPosicaoInput
     ) -> str:
         """
-        Consulta histórico de posições GPS.
+        Consulta o histórico de posições GPS de um veículo em um período de tempo.
+        Use quando o usuário perguntar sobre rota percorrida, trajeto ou posições históricas.
         """
 
         try:
@@ -444,12 +575,23 @@ def registrar_tools_veiculos(mcp: FastMCP):
             ]
 
             for p in limitar_lista(posicoes, MAX_REGISTROS):
+                data = p.get("date") or p.get("fecha") or "N/A"
+                hora = p.get("time") or p.get("hora") or "N/A"
+                vel  = p.get("speed", 0)
+                lat  = p.get("latitude", "N/A")
+                lon  = p.get("longitude", "N/A")
+                geo  = p.get("geo") or p.get("address") or ""
 
-                linhas.append(
-                    f"- {p.get('date')} {p.get('time')} | "
-                    f"Vel: {p.get('speed', 0)} km/h | "
-                    f"[{p.get('latitude', 'N/A')}, {p.get('longitude', 'N/A')}]"
+                linha = (
+                    f"- {data} {hora} | "
+                    f"Vel: {vel} km/h | "
+                    f"[{lat}, {lon}]"
                 )
+
+                if geo:
+                    linha += f" | {geo}"
+
+                linhas.append(linha)
 
             if len(posicoes) > MAX_REGISTROS:
                 linhas.append(
@@ -468,7 +610,7 @@ def registrar_tools_veiculos(mcp: FastMCP):
     @mcp.tool(name="listar_marcas_modelos")
     async def listar_marcas_modelos() -> str:
         """
-        Lista marcas e modelos disponíveis.
+        Lista todas as marcas e modelos de veículos disponíveis na plataforma.
         """
 
         try:
@@ -480,16 +622,22 @@ def registrar_tools_veiculos(mcp: FastMCP):
             linhas = ["🚘 **Marcas e Modelos Disponíveis:**\n"]
 
             for marca in limitar_lista(dados, 30):
+                # API pode retornar 'name', 'brand' ou 'marca'
+                nome = (
+                    marca.get("name")
+                    or marca.get("brand")
+                    or marca.get("marca")
+                    or "N/A"
+                )
 
-                nome = marca.get("name") or marca.get("brand") or "N/A"
-
-                modelos = marca.get("models") or []
+                modelos = marca.get("models") or marca.get("modelos") or []
 
                 nomes_modelos = [
-                    m.get("name", "")
+                    m.get("name") or m.get("nombre") or m.get("modelo") or ""
                     for m in modelos[:10]
-                    if m.get("name")
+                    if isinstance(m, dict)
                 ]
+                nomes_modelos = [n for n in nomes_modelos if n]
 
                 linhas.append(
                     f"**{nome}**: "
