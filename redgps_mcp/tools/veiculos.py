@@ -58,40 +58,24 @@ MAX_VEICULOS  = 100  # listagem de veículos
 # =============================================================================
 # HELPERS — FUNÇÕES AUXILIARES REUTILIZÁVEIS
 # =============================================================================
-#
-# POR QUE TER HELPERS SEPARADOS?
-#   A API RedGPS mistura campos em espanhol (nombre, patente, anio, conductor)
-#   e inglês (name, plate, year, driver) dependendo do endpoint. Centralizamos
-#   essa lógica em funções pequenas para não repetir código em cada tool.
-#
-
 
 async def executar_post(endpoint: str, payload: Dict[str, Any] | None = None):
     """
     Executa uma chamada POST à API RedGPS com timeout e validação de status.
 
-    POR QUE USAR ISSO?
-      Centraliza 3 responsabilidades:
-      1. Aplica timeout para não deixar o Claude esperando para sempre
-      2. Verifica se a API retornou status 200 (sucesso)
-      3. Extrai o campo "data" da resposta (onde ficam os dados reais)
-
     PARÂMETROS:
       endpoint : nome do endpoint sem URL base (ex: "vehicleGetAll")
-      payload  : parâmetros extras além de apikey/token, que são injetados
-                 automaticamente pelo utils/api_client.py
+      payload  : parâmetros extras além de apikey/token, injetados pelo api_client.
 
     RETORNA:
       O valor de resultado["data"] — pode ser list ou dict dependendo do endpoint.
-      vehicleGetAll → list
-      getOdometer   → dict ou list com 1 item
 
     LANÇA:
       Exception com mensagem clara se status != 200
       asyncio.TimeoutError se demorar mais que TIMEOUT_API segundos
     """
     resultado = await asyncio.wait_for(
-        post(endpoint, payload),   # post() em utils/api_client.py injeta apikey/token
+        post(endpoint, payload),
         timeout=TIMEOUT_API
     )
 
@@ -106,17 +90,7 @@ async def executar_post(endpoint: str, payload: Dict[str, Any] | None = None):
 def gerar_maps_url(lat, lon) -> str:
     """
     Gera uma URL do Google Maps a partir de latitude e longitude.
-
-    POR QUE VALIDAR ANTES?
-      A API às vezes retorna latitude/longitude como None, "", ou "N/A"
-      quando o veículo está sem sinal GPS. Gerar uma URL com esses valores
-      causaria um link inválido.
-
-    EXEMPLO:
-      gerar_maps_url(-23.5505, -46.6333)
-      → "https://maps.google.com/?q=-23.5505,-46.6333"
-
-      gerar_maps_url(None, None) → ""
+    Retorna "" se lat/lon forem None, "" ou "N/A".
     """
     if lat in [None, "", "N/A"] or lon in [None, "", "N/A"]:
         return ""
@@ -126,13 +100,7 @@ def gerar_maps_url(lat, lon) -> str:
 def status_ativo(veiculo: Dict[str, Any]) -> str:
     """
     Lê o campo 'status' de um veículo e retorna emoji visual.
-
-    A API RedGPS usa inteiro para status de veículo:
-      1 = ativo (rastreador funcionando)
-      0 = inativo (rastreador desabilitado ou sem contrato)
-
-    DIFERENTE de clientes.py onde "active" é booleano True/False.
-    Aqui é sempre inteiro, por isso convertemos com int().
+    A API RedGPS usa inteiro: 1 = ativo, 0 = inativo.
     """
     try:
         status = int(veiculo.get("status", 0))
@@ -142,28 +110,11 @@ def status_ativo(veiculo: Dict[str, Any]) -> str:
 
 
 def limitar_lista(lista: List[Any], limite: int) -> List[Any]:
-    """
-    Retorna os primeiros N itens de uma lista.
-
-    PARA QUE SERVE?
-      Frotas grandes podem ter centenas de veículos ou milhares de posições.
-      Sem limite, a resposta ficaria enorme e poderia:
-      - Travar o chat do Claude (limite de contexto)
-      - Demorar muito para renderizar
-      - Confundir o usuário com excesso de informação
-
-    BOAS PRÁTICAS:
-      Sempre exibir "... e mais X registros" se truncar.
-      Isso informa o usuário que há mais dados disponíveis.
-    """
+    """Retorna os primeiros N itens de uma lista."""
     return lista[:limite]
 
 
 # ─── Helpers específicos para campos de veículo ──────────────────────────────
-# A API RedGPS usa nomes diferentes dependendo do endpoint:
-#   vehicleGetAll      → "nombre", "patente" (espanhol)
-#   getdata (tempo real) → "name", "plate", "device" (inglês)
-# Por isso tentamos múltiplas chaves em cada helper.
 
 def get_nome_veiculo(v: Dict[str, Any]) -> str:
     """
@@ -171,15 +122,15 @@ def get_nome_veiculo(v: Dict[str, Any]) -> str:
     Tenta campos em espanhol primeiro (vehicleGetAll), depois inglês (getdata) e PascalCase.
     """
     return (
-        v.get("nombre")    # vehicleGetAll usa espanhol
-        or v.get("name")   # getdata usa inglês
+        v.get("nombre")
+        or v.get("name")
         or v.get("UnitId")
         or v.get("unitId")
-        or v.get("patente") # placa como nome (vehicleGetAll)
-        or v.get("plate")  # placa como nome (getdata)
+        or v.get("patente")
+        or v.get("plate")
         or v.get("UnitPlate")
         or v.get("unitPlate")
-        or v.get("device") # identificador do rastreador (fallback)
+        or v.get("device")
         or "N/A"
     )
 
@@ -208,8 +159,8 @@ def get_modelo(v: Dict[str, Any]) -> str:
 def get_ano(v: Dict[str, Any]) -> str:
     """
     Retorna o ano do veículo.
-    'anio' é o campo em espanhol (ñ foi substituído por 'ni' na API).
-    Trata '0' como não informado, pois a API retorna 0 quando não cadastrado.
+    'anio' é o campo em espanhol (ñ substituído por 'ni' na API).
+    Trata '0' como não informado.
     """
     ano = v.get("anio") or v.get("year") or "N/A"
     return "N/A" if str(ano) == "0" else str(ano)
@@ -224,14 +175,16 @@ def get_id_veiculo(v: Dict[str, Any]) -> str:
     """
     Retorna o ID único do veículo/ativo.
     A API usa 'id', 'idasset' ou 'asset' dependendo do endpoint e versão.
-    Este ID é necessário para chamar getOdometer, historyGet, historyGetEvents.
+
+    CORREÇÃO: o original usava `str(v.get("id") or "")`, que converte o
+    inteiro 0 para "" porque 0 é falsy em Python. Agora verificamos
+    explicitamente se o valor é None antes de descartar.
     """
-    return (
-        str(v.get("id") or "")
-        or str(v.get("idasset") or "")
-        or str(v.get("asset") or "")
-        or "N/A"
-    )
+    for chave in ("id", "idasset", "asset"):
+        valor = v.get(chave)
+        if valor is not None and str(valor).strip() != "":
+            return str(valor)
+    return "N/A"
 
 
 def get_condutor(v: Dict[str, Any]) -> str:
@@ -249,21 +202,22 @@ def get_condutor(v: Dict[str, Any]) -> str:
 
 
 def get_grupo(v: Dict[str, Any]) -> str:
-    """
-    Retorna o grupo ao qual o veículo pertence.
-    Grupos são usados para organizar frotas (ex: "Caminhões", "Motos").
-    """
+    """Retorna o grupo ao qual o veículo pertence."""
     return v.get("grupo") or v.get("group") or "N/A"
 
 
 def escolher_valor(v: Dict[str, Any], *chaves, default=None):
     """
-    Retorna o primeiro valor não vazio encontrado nas chaves fornecidas.
-    Isso permite suportar campos em espanhol, inglês e PascalCase.
+    Retorna o primeiro valor não-None e não-vazio encontrado nas chaves fornecidas.
+
+    CORREÇÃO: o original retornava `default` apenas quando o valor era None
+    ou "". Agora também descarta o inteiro 0 nos callers que usam `or` chain?
+    Não — aqui mantemos 0 como valor válido. Os callers que precisam de
+    string de exibição devem converter com str() após chamar esta função.
     """
     for chave in chaves:
         if chave in v:
-            valor = v.get(chave)
+            valor = v[chave]
             if valor is not None and valor != "":
                 return valor
     return default
@@ -281,35 +235,19 @@ def valor_verdadeiro(v: Dict[str, Any], *chaves) -> bool:
 
 
 def get_tipo(v: Dict[str, Any]) -> str:
-    """
-    Retorna o tipo do veículo (carro, moto, caminhão, etc.).
-    'tipo_vehiculo' é o campo em espanhol da API RedGPS.
-    """
+    """Retorna o tipo do veículo (carro, moto, caminhão, etc.)."""
     return escolher_valor(v, "tipo_vehiculo", "type", "Type", "Tipo", "tipo") or "N/A"
 
 
 # =============================================================================
 # VALIDADORES PYDANTIC — MODELOS DE PARÂMETROS DAS TOOLS
 # =============================================================================
-#
-# POR QUE USAR PYDANTIC?
-#   Pydantic valida e documenta os parâmetros que o Claude pode passar
-#   para cada tool. Dois benefícios principais:
-#   1. SEGURANÇA: valida os dados antes de enviar à API (evita erros absurdos)
-#   2. DOCUMENTAÇÃO: Field(description=...) serve como instrução ao Claude
-#      sobre o que colocar em cada parâmetro
-#
-# @field_validator:
-#   Decorador do Pydantic que executa validação customizada em um campo.
-#   Se a validação falhar, o Claude recebe uma mensagem de erro clara.
-#
-
 
 class BuscarVeiculoInput(BaseModel):
     """Parâmetros para buscar_veiculo."""
 
     nome_ou_placa: str = Field(
-        ...,   # ... = obrigatório no Pydantic
+        ...,
         description=(
             "Nome do veículo, placa (ex: 'ABC1234' ou 'ABC-1234') "
             "ou qualquer identificador usado no sistema. "
@@ -371,11 +309,7 @@ class HistoricoEventosInput(BaseModel):
     @field_validator("data_inicio", "data_fim")
     @classmethod
     def validar_data(cls, value):
-        """
-        Garante que a data esteja no formato correto (YYYY-MM-DD).
-        Se o Claude passar '01/01/2026' ou '2026/01/01', este validador
-        lançará ValueError com mensagem clara antes de chamar a API.
-        """
+        """Garante que a data esteja no formato correto (YYYY-MM-DD)."""
         try:
             datetime.strptime(value, "%Y-%m-%d")
         except ValueError:
@@ -412,10 +346,7 @@ class HistoricoPosicaoInput(BaseModel):
     @field_validator("data_inicio", "data_fim")
     @classmethod
     def validar_data_hora(cls, value):
-        """
-        Valida formato YYYY-MM-DD HH:MM:SS.
-        historyGet exige horário além da data, por isso validador separado.
-        """
+        """Valida formato YYYY-MM-DD HH:MM:SS."""
         try:
             datetime.strptime(value, "%Y-%m-%d %H:%M:%S")
         except ValueError:
@@ -429,18 +360,6 @@ class HistoricoPosicaoInput(BaseModel):
 # =============================================================================
 # REGISTRO DAS TOOLS MCP
 # =============================================================================
-#
-# ENGENHARIA DE PROMPTS — PRINCÍPIOS USADOS NAS DOCSTRINGS:
-#
-# 1. PRIMEIRA LINHA: ação direta (o que a tool faz)
-# 2. "USE ESTA TOOL quando...": orienta o Claude sobre quando chamar
-# 3. "EXEMPLOS DE PERGUNTAS": frases reais que o usuário pode digitar
-# 4. "NÃO USE / FLUXO RECOMENDADO": evita que o Claude chame a tool errada
-# 5. "NOTA TÉCNICA": informações sobre limites e comportamentos da API
-#
-# QUANTO MAIS ESPECÍFICA A DOCSTRING, MELHOR O CLAUDE DECIDE.
-#
-
 
 def registrar_tools_veiculos(mcp: FastMCP):
     """
@@ -472,10 +391,9 @@ def registrar_tools_veiculos(mcp: FastMCP):
 
         return f"```json\n{json.dumps(resultados, indent=2, ensure_ascii=False)}\n```"
 
+
     # =========================================================================
     # TOOL: listar_veiculos
-    # ENDPOINT: POST /vehicleGetAll
-    # SEM PARÂMETROS EXTRAS
     # =========================================================================
     @mcp.tool(name="listar_veiculos")
     async def listar_veiculos() -> str:
@@ -504,9 +422,6 @@ def registrar_tools_veiculos(mcp: FastMCP):
         - IDs desta lista são usados em consultar_odometro e historico_eventos
         """
         try:
-            # Documentação: POST /vehicleGetAll
-            # Sem parâmetros extras — retorna todos os veículos do usuário autenticado
-            # Campos principais: nombre/name, patente/plate, id/idasset, status, grupo, tipo_vehiculo
             veiculos = await executar_post("vehicleGetAll")
 
             if not veiculos:
@@ -515,7 +430,7 @@ def registrar_tools_veiculos(mcp: FastMCP):
             linhas = [
                 f"🚗 **Total de veículos: {len(veiculos)}**\n",
                 "| # | Nome | Placa | ID | Tipo | Grupo | Ativo |",
-                "|---|------|-------|----|------|-------|-------|"
+                "|---|------|-------|----|------|-------|-------|",
             ]
 
             for i, v in enumerate(limitar_lista(veiculos, MAX_VEICULOS), start=1):
@@ -538,8 +453,6 @@ def registrar_tools_veiculos(mcp: FastMCP):
 
     # =========================================================================
     # TOOL: listar_veiculos_completo
-    # ENDPOINT: POST /vehicleGetAllComplete
-    # SEM PARÂMETROS EXTRAS
     # =========================================================================
     @mcp.tool(name="listar_veiculos_completo")
     async def listar_veiculos_completo() -> str:
@@ -568,8 +481,6 @@ def registrar_tools_veiculos(mcp: FastMCP):
           mais campos extras: marca, modelo, anio, color, sensores
         """
         try:
-            # Documentação: POST /vehicleGetAllComplete
-            # Retorna tudo que vehicleGetAll retorna + campos extras de cadastro
             veiculos = await executar_post("vehicleGetAllComplete")
 
             if not veiculos:
@@ -601,8 +512,6 @@ def registrar_tools_veiculos(mcp: FastMCP):
                     f"- Status: {ativo}",
                 ]
 
-                # Sensores: campo "sensors" ou "sensores" — dicionário de objetos sensor
-                # Cada sensor tem nome, tipo e configuração específica
                 sensores = v.get("sensors") or v.get("sensores")
                 if sensores and isinstance(sensores, dict):
                     nomes_sensores = [
@@ -627,8 +536,6 @@ def registrar_tools_veiculos(mcp: FastMCP):
 
     # =========================================================================
     # TOOL: localizacao_veiculos
-    # ENDPOINT: POST /getdata
-    # SEM PARÂMETROS EXTRAS — retorna TODOS os veículos em tempo real
     # =========================================================================
     @mcp.tool(name="localizacao_veiculos")
     async def localizacao_veiculos() -> str:
@@ -661,8 +568,6 @@ def registrar_tools_veiculos(mcp: FastMCP):
           conductor/driver, odometer, date, time, geo/address
         """
         try:
-            # Documentação: POST /getdata
-            # Sem parâmetros extras — retorna todos os veículos com localização atual
             veiculos = await executar_post("getdata")
 
             if not veiculos:
@@ -677,62 +582,25 @@ def registrar_tools_veiculos(mcp: FastMCP):
                 lat = escolher_valor(v, "latitude", "Latitude")
                 lon = escolher_valor(v, "longitude", "Longitude")
 
-                # speed: velocidade em km/h (0 = parado)
                 velocidade = escolher_valor(
-                    v,
-                    "speed",
-                    "Speed",
-                    "GpsSpeed",
-                    "gpsSpeed",
-                    default=0
+                    v, "speed", "Speed", "GpsSpeed", "gpsSpeed", default=0
                 )
-
-                # ignition: True/1 = ligado, False/0 = desligado
                 ignicao = "🔑 Ligado" if valor_verdadeiro(v, "ignition", "Ignition") else "⭕ Desligado"
-
                 condutor = get_condutor(v)
-
-                # Endereço por extenso: a API faz geocodificação reversa e retorna
-                # o endereço no campo "geo" ou "address"
                 geo = (
                     escolher_valor(v, "geo", "Geo", "address", "Address", "endereco", "Domicilio")
                     or "Local não informado"
                 )
-
-                # Odômetro total acumulado do veículo em km
                 odometro = escolher_valor(
-                    v,
-                    "odometer",
-                    "Odometer",
-                    "odometro",
-                    "km",
-                    "Km",
-                    default="N/A"
+                    v, "odometer", "Odometer", "odometro", "km", "Km", default="N/A"
                 )
-
-                # Evento atual: "Ignição ligada", "Excesso de velocidade", "Parada", etc.
                 evento = escolher_valor(
-                    v,
-                    "event",
-                    "Event",
-                    "evento",
-                    "Evento",
-                    default="N/A"
+                    v, "event", "Event", "evento", "Evento", default="N/A"
                 )
-
-                # Data e hora do último reporte GPS recebido
                 data_rep = escolher_valor(
-                    v,
-                    "date",
-                    "Date",
-                    "fecha",
-                    "ReportDate",
-                    "InsertionDate",
-                    default="N/A"
+                    v, "date", "Date", "fecha", "ReportDate", "InsertionDate", default="N/A"
                 )
                 hora_rep = escolher_valor(v, "time", "Time", "hora", default="N/A")
-
-                # URL do Google Maps (vazio se sem coordenadas)
                 maps_url = gerar_maps_url(lat, lon)
 
                 bloco = [
@@ -762,8 +630,6 @@ def registrar_tools_veiculos(mcp: FastMCP):
 
     # =========================================================================
     # TOOL: buscar_veiculo
-    # ENDPOINT: POST /getdata (filtragem local — a API não suporta filtro por nome)
-    # PARÂMETRO: nome_ou_placa (string, busca parcial)
     # =========================================================================
     @mcp.tool(name="buscar_veiculo")
     async def buscar_veiculo(params: BuscarVeiculoInput) -> str:
@@ -786,16 +652,12 @@ def registrar_tools_veiculos(mcp: FastMCP):
           e filtramos pelo termo informado. A API RedGPS não suporta filtro
           por nome/placa diretamente no endpoint getdata.
         - A busca é parcial e não diferencia maiúsculas/minúsculas.
-          "abc" encontra "ABC1234" e "abc-5678".
         """
         try:
-            # Busca todos os veículos — filtragem é feita localmente
             veiculos = await executar_post("getdata")
 
-            # Normaliza o termo de busca: minúsculas e sem espaços extras
             termo = params.nome_ou_placa.lower().strip()
 
-            # Busca em nome, placa e ID (o usuário pode digitar qualquer um)
             encontrados = [
                 v for v in veiculos
                 if termo in str(get_nome_veiculo(v)).lower()
@@ -821,13 +683,7 @@ def registrar_tools_veiculos(mcp: FastMCP):
                     or "Local não informado"
                 )
                 data_rep = escolher_valor(
-                    v,
-                    "date",
-                    "Date",
-                    "fecha",
-                    "ReportDate",
-                    "InsertionDate",
-                    default="N/A"
+                    v, "date", "Date", "fecha", "ReportDate", "InsertionDate", default="N/A"
                 )
                 hora_rep = escolher_valor(v, "time", "Time", "hora", default="N/A")
                 maps_url = gerar_maps_url(lat, lon)
@@ -844,7 +700,7 @@ def registrar_tools_veiculos(mcp: FastMCP):
                 if maps_url:
                     bloco.append(f"- 🗺️ Mapa: {maps_url}")
 
-                bloco.append("")  # linha em branco entre veículos
+                bloco.append("")
                 linhas.extend(bloco)
 
             return "\n".join(linhas)
@@ -855,8 +711,6 @@ def registrar_tools_veiculos(mcp: FastMCP):
 
     # =========================================================================
     # TOOL: consultar_odometro
-    # ENDPOINT: POST /getOdometer
-    # PARÂMETRO OBRIGATÓRIO: idasset (ID do veículo)
     # =========================================================================
     @mcp.tool(name="consultar_odometro")
     async def consultar_odometro(params: OdometroInput) -> str:
@@ -883,18 +737,14 @@ def registrar_tools_veiculos(mcp: FastMCP):
         - Endpoint: POST /getOdometer com parâmetro: idasset = ID do veículo
         """
         try:
-            # Documentação: POST /getOdometer
-            # Parâmetro: idasset → ID do veículo/ativo
             dados = await executar_post(
                 "getOdometer",
                 {"idasset": params.id_veiculo}
             )
 
-            # getOdometer pode retornar lista com 1 item ou dict direto
             if isinstance(dados, list):
                 dados = dados[0] if dados else {}
 
-            # Tenta múltiplos nomes de campo para o odômetro
             odometro = (
                 dados.get("odometer")
                 or dados.get("odometro")
@@ -913,8 +763,6 @@ def registrar_tools_veiculos(mcp: FastMCP):
 
     # =========================================================================
     # TOOL: historico_eventos
-    # ENDPOINT: POST /historyGetEvents
-    # PARÂMETROS: idasset, date_begin, date_end
     # =========================================================================
     @mcp.tool(name="historico_eventos")
     async def historico_eventos(params: HistoricoEventosInput) -> str:
@@ -947,9 +795,6 @@ def registrar_tools_veiculos(mcp: FastMCP):
           Parâmetros: idasset, date_begin (YYYY-MM-DD), date_end (YYYY-MM-DD)
         """
         try:
-            # Documentação: POST /historyGetEvents
-            # Parâmetros: idasset, date_begin, date_end (formato YYYY-MM-DD)
-            # Retorna lista de eventos com: date, time, event/evento, speed, lat, lon
             eventos = await executar_post(
                 "historyGetEvents",
                 {
@@ -965,14 +810,17 @@ def registrar_tools_veiculos(mcp: FastMCP):
                     f"entre {params.data_inicio} e {params.data_fim}."
                 )
 
+            # CORREÇÃO: f-strings separadas por vírgula para serem itens distintos
+            # da lista. Sem a vírgula, Python concatena as f-strings em tempo de
+            # compilação, transformando as 3 linhas em uma única string — o que
+            # faz o cabeçalho aparecer colado em uma linha só no chat.
             linhas = [
-                f"📋 **Histórico de Eventos — Veículo {params.id_veiculo}**\n"
-                f"📅 Período: {params.data_inicio} a {params.data_fim}\n"
-                f"📊 Total: {len(eventos)} evento(s)\n"
+                f"📋 **Histórico de Eventos — Veículo {params.id_veiculo}**\n",
+                f"📅 Período: {params.data_inicio} a {params.data_fim}\n",
+                f"📊 Total: {len(eventos)} evento(s)\n",
             ]
 
             for e in limitar_lista(eventos, MAX_REGISTROS):
-                # Campos em espanhol (fecha/hora) e inglês (date/time)
                 data  = e.get("date")  or e.get("fecha") or "N/A"
                 hora  = e.get("time")  or e.get("hora")  or "N/A"
                 event = e.get("event") or e.get("evento") or "N/A"
@@ -1000,8 +848,6 @@ def registrar_tools_veiculos(mcp: FastMCP):
 
     # =========================================================================
     # TOOL: historico_posicoes
-    # ENDPOINT: POST /historyGet
-    # PARÂMETROS: idasset, date_begin (com horário), date_end (com horário)
     # =========================================================================
     @mcp.tool(name="historico_posicoes")
     async def historico_posicoes(params: HistoricoPosicaoInput) -> str:
@@ -1038,9 +884,6 @@ def registrar_tools_veiculos(mcp: FastMCP):
           Parâmetros: idasset, date_begin, date_end (YYYY-MM-DD HH:MM:SS)
         """
         try:
-            # Documentação: POST /historyGet
-            # ATENÇÃO: date_begin e date_end devem incluir horário (HH:MM:SS)
-            # Diferente de historyGetEvents que aceita apenas YYYY-MM-DD
             posicoes = await executar_post(
                 "historyGet",
                 {
@@ -1056,10 +899,11 @@ def registrar_tools_veiculos(mcp: FastMCP):
                     f"entre {params.data_inicio} e {params.data_fim}."
                 )
 
+            # CORREÇÃO: vírgulas separando cada f-string em item distinto da lista
             linhas = [
-                f"📍 **Histórico de Posições — Veículo {params.id_veiculo}**\n"
-                f"📅 Período: {params.data_inicio} → {params.data_fim}\n"
-                f"📊 Total: {len(posicoes)} registro(s)\n"
+                f"📍 **Histórico de Posições — Veículo {params.id_veiculo}**\n",
+                f"📅 Período: {params.data_inicio} → {params.data_fim}\n",
+                f"📊 Total: {len(posicoes)} registro(s)\n",
             ]
 
             for p in limitar_lista(posicoes, MAX_REGISTROS):
@@ -1068,7 +912,6 @@ def registrar_tools_veiculos(mcp: FastMCP):
                 vel  = p.get("speed", 0)
                 lat  = p.get("latitude",  "N/A")
                 lon  = p.get("longitude", "N/A")
-                # Endereço (geocodificação reversa feita pela API)
                 geo  = p.get("geo") or p.get("address") or ""
 
                 linha = (
@@ -1096,8 +939,6 @@ def registrar_tools_veiculos(mcp: FastMCP):
 
     # =========================================================================
     # TOOL: listar_marcas_modelos
-    # ENDPOINT: POST /getBrandsAndModels
-    # SEM PARÂMETROS EXTRAS
     # =========================================================================
     @mcp.tool(name="listar_marcas_modelos")
     async def listar_marcas_modelos() -> str:
@@ -1119,8 +960,6 @@ def registrar_tools_veiculos(mcp: FastMCP):
         - Endpoint: POST /getBrandsAndModels, sem parâmetros extras
         """
         try:
-            # Documentação: POST /getBrandsAndModels
-            # Retorna lista de marcas, cada uma com lista de modelos
             dados = await executar_post("getBrandsAndModels")
 
             if not dados:
@@ -1129,7 +968,6 @@ def registrar_tools_veiculos(mcp: FastMCP):
             linhas = ["🚘 **Marcas e Modelos Disponíveis:**\n"]
 
             for marca in limitar_lista(dados, 30):
-                # Nome da marca: 'name', 'brand' ou 'marca' dependendo da versão da API
                 nome = (
                     marca.get("name")
                     or marca.get("brand")
@@ -1137,16 +975,14 @@ def registrar_tools_veiculos(mcp: FastMCP):
                     or "N/A"
                 )
 
-                # Lista de modelos dentro de cada marca
                 modelos = marca.get("models") or marca.get("modelos") or []
 
-                # Extrai nomes dos modelos (cada modelo é um dict)
                 nomes_modelos = [
                     m.get("name") or m.get("nombre") or m.get("modelo") or ""
-                    for m in modelos[:10]   # máximo 10 modelos por marca
+                    for m in modelos[:10]
                     if isinstance(m, dict)
                 ]
-                nomes_modelos = [n for n in nomes_modelos if n]  # remove vazios
+                nomes_modelos = [n for n in nomes_modelos if n]
 
                 linhas.append(
                     f"**{nome}**: "
@@ -1157,4 +993,3 @@ def registrar_tools_veiculos(mcp: FastMCP):
 
         except Exception as e:
             return tratar_erro(e)
-
