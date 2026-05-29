@@ -415,21 +415,23 @@ def registrar_tools_veiculos(mcp: FastMCP):
         Retorna os dados brutos do primeiro veículo da API para diagnóstico.
         Use quando precisar ver os campos exatos que a API está retornando.
         """
-        try:
-            resultado = await asyncio.wait_for(
-                post("getdata", None),
-                timeout=TIMEOUT_API
-            )
-            # Retorna o JSON completo do primeiro veículo sem nenhum tratamento
-            import json
-            dados = resultado.get("data", [])
-            if not dados:
-                return "Nenhum dado retornado pela API."
-            # Mostra os campos do primeiro veículo
-            primeiro = dados[0] if isinstance(dados, list) else dados
-            return f"**Campos retornados pela API (primeiro veículo):**\n```json\n{json.dumps(primeiro, indent=2, ensure_ascii=False)}\n```"
-        except Exception as e:
-            return tratar_erro(e)
+        import json
+
+        resultados = {}
+        for endpoint in ["vehicleGetAll", "getdata", "vehicleGetAllComplete"]:
+            try:
+                r = await asyncio.wait_for(post(endpoint, None), timeout=TIMEOUT_API)
+                dados = r.get("data", [])
+                primeiro = dados[0] if isinstance(dados, list) and dados else dados
+                resultados[endpoint] = {
+                    "status": r.get("status"),
+                    "campos": list(primeiro.keys()) if isinstance(primeiro, dict) else str(primeiro)[:200],
+                    "amostra": {k: v for k, v in list(primeiro.items())[:10]} if isinstance(primeiro, dict) else primeiro,
+                }
+            except Exception as e:
+                resultados[endpoint] = {"erro": str(e)}
+
+        return f"```json\n{json.dumps(resultados, indent=2, ensure_ascii=False)}\n```"
 
     # =========================================================================
     # TOOL: listar_veiculos
