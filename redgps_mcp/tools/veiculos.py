@@ -409,6 +409,28 @@ def registrar_tools_veiculos(mcp: FastMCP):
     Chamada uma vez em server.py durante a inicialização do servidor.
     """
 
+    @mcp.tool(name="debug_dados_brutos")
+    async def debug_dados_brutos() -> str:
+        """
+        Retorna os dados brutos do primeiro veículo da API para diagnóstico.
+        Use quando precisar ver os campos exatos que a API está retornando.
+        """
+        try:
+            resultado = await asyncio.wait_for(
+                post("getdata", None),
+                timeout=TIMEOUT_API
+            )
+            # Retorna o JSON completo do primeiro veículo sem nenhum tratamento
+            import json
+            dados = resultado.get("data", [])
+            if not dados:
+                return "Nenhum dado retornado pela API."
+            # Mostra os campos do primeiro veículo
+            primeiro = dados[0] if isinstance(dados, list) else dados
+            return f"**Campos retornados pela API (primeiro veículo):**\n```json\n{json.dumps(primeiro, indent=2, ensure_ascii=False)}\n```"
+        except Exception as e:
+            return tratar_erro(e)
+
     # =========================================================================
     # TOOL: listar_veiculos
     # ENDPOINT: POST /vehicleGetAll
