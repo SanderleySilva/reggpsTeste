@@ -168,21 +168,31 @@ def limitar_lista(lista: List[Any], limite: int) -> List[Any]:
 def get_nome_veiculo(v: Dict[str, Any]) -> str:
     """
     Retorna o nome/identificação do veículo.
-    Tenta campos em espanhol primeiro (vehicleGetAll), depois inglês (getdata).
+    Tenta campos em espanhol primeiro (vehicleGetAll), depois inglês (getdata) e PascalCase.
     """
     return (
         v.get("nombre")    # vehicleGetAll usa espanhol
         or v.get("name")   # getdata usa inglês
+        or v.get("UnitId")
+        or v.get("unitId")
         or v.get("patente") # placa como nome (vehicleGetAll)
         or v.get("plate")  # placa como nome (getdata)
+        or v.get("UnitPlate")
+        or v.get("unitPlate")
         or v.get("device") # identificador do rastreador (fallback)
         or "N/A"
     )
 
 
 def get_placa(v: Dict[str, Any]) -> str:
-    """Retorna a placa — 'patente' (espanhol) ou 'plate' (inglês)."""
-    return v.get("patente") or v.get("plate") or "N/A"
+    """Retorna a placa — 'patente' (espanhol), 'plate' (inglês) ou 'UnitPlate' (PascalCase)."""
+    return (
+        v.get("patente")
+        or v.get("plate")
+        or v.get("UnitPlate")
+        or v.get("unitPlate")
+        or "N/A"
+    )
 
 
 def get_marca(v: Dict[str, Any]) -> str:
@@ -227,10 +237,15 @@ def get_id_veiculo(v: Dict[str, Any]) -> str:
 def get_condutor(v: Dict[str, Any]) -> str:
     """
     Retorna o nome do condutor identificado no momento.
-    'conductor' (espanhol) ou 'driver' (inglês).
-    Pode ser vazio se o veículo não tiver iButton/RFID ou condutor identificado.
+    Suporta campos em espanhol, inglês e PascalCase.
     """
-    return v.get("conductor") or v.get("driver") or "Não identificado"
+    return (
+        v.get("conductor")
+        or v.get("Conductor")
+        or v.get("driver")
+        or v.get("Driver")
+        or "Não identificado"
+    )
 
 
 def get_grupo(v: Dict[str, Any]) -> str:
@@ -241,12 +256,36 @@ def get_grupo(v: Dict[str, Any]) -> str:
     return v.get("grupo") or v.get("group") or "N/A"
 
 
+def escolher_valor(v: Dict[str, Any], *chaves, default=None):
+    """
+    Retorna o primeiro valor não vazio encontrado nas chaves fornecidas.
+    Isso permite suportar campos em espanhol, inglês e PascalCase.
+    """
+    for chave in chaves:
+        if chave in v:
+            valor = v.get(chave)
+            if valor is not None and valor != "":
+                return valor
+    return default
+
+
+def valor_verdadeiro(v: Dict[str, Any], *chaves) -> bool:
+    """
+    Interpreta valores verdadeiros comuns para campos booleanos.
+    Suporta 1, '1', True, 'true', 'True', 'on', 'yes', 'sim'.
+    """
+    valor = escolher_valor(v, *chaves)
+    if valor is None:
+        return False
+    return str(valor).strip().lower() in {"1", "true", "yes", "sim", "on"}
+
+
 def get_tipo(v: Dict[str, Any]) -> str:
     """
     Retorna o tipo do veículo (carro, moto, caminhão, etc.).
     'tipo_vehiculo' é o campo em espanhol da API RedGPS.
     """
-    return v.get("tipo_vehiculo") or v.get("type") or "N/A"
+    return escolher_valor(v, "tipo_vehiculo", "type", "Type", "Tipo", "tipo") or "N/A"
 
 
 # =============================================================================
@@ -635,35 +674,63 @@ def registrar_tools_veiculos(mcp: FastMCP):
                 nome  = get_nome_veiculo(v)
                 placa = get_placa(v)
 
-                lat = v.get("latitude")
-                lon = v.get("longitude")
+                lat = escolher_valor(v, "latitude", "Latitude")
+                lon = escolher_valor(v, "longitude", "Longitude")
 
                 # speed: velocidade em km/h (0 = parado)
-                velocidade = v.get("speed", 0)
+                velocidade = escolher_valor(
+                    v,
+                    "speed",
+                    "Speed",
+                    "GpsSpeed",
+                    "gpsSpeed",
+                    default=0
+                )
 
                 # ignition: True/1 = ligado, False/0 = desligado
-                ignicao = "🔑 Ligado" if v.get("ignition") else "⭕ Desligado"
+                ignicao = "🔑 Ligado" if valor_verdadeiro(v, "ignition", "Ignition") else "⭕ Desligado"
 
                 condutor = get_condutor(v)
 
                 # Endereço por extenso: a API faz geocodificação reversa e retorna
                 # o endereço no campo "geo" ou "address"
                 geo = (
-                    v.get("geo")
-                    or v.get("address")
-                    or v.get("endereco")
+                    escolher_valor(v, "geo", "Geo", "address", "Address", "endereco", "Domicilio")
                     or "Local não informado"
                 )
 
                 # Odômetro total acumulado do veículo em km
-                odometro = v.get("odometer") or v.get("odometro") or "N/A"
+                odometro = escolher_valor(
+                    v,
+                    "odometer",
+                    "Odometer",
+                    "odometro",
+                    "km",
+                    "Km",
+                    default="N/A"
+                )
 
                 # Evento atual: "Ignição ligada", "Excesso de velocidade", "Parada", etc.
-                evento = v.get("event") or v.get("evento") or "N/A"
+                evento = escolher_valor(
+                    v,
+                    "event",
+                    "Event",
+                    "evento",
+                    "Evento",
+                    default="N/A"
+                )
 
                 # Data e hora do último reporte GPS recebido
-                data_rep = v.get("date") or v.get("fecha") or "N/A"
-                hora_rep = v.get("time") or v.get("hora")  or "N/A"
+                data_rep = escolher_valor(
+                    v,
+                    "date",
+                    "Date",
+                    "fecha",
+                    "ReportDate",
+                    "InsertionDate",
+                    default="N/A"
+                )
+                hora_rep = escolher_valor(v, "time", "Time", "hora", default="N/A")
 
                 # URL do Google Maps (vazio se sem coordenadas)
                 maps_url = gerar_maps_url(lat, lon)
@@ -747,17 +814,28 @@ def registrar_tools_veiculos(mcp: FastMCP):
             for v in encontrados:
                 nome     = get_nome_veiculo(v)
                 placa    = get_placa(v)
-                lat      = v.get("latitude")
-                lon      = v.get("longitude")
-                geo      = v.get("geo") or v.get("address") or "Local não informado"
-                data_rep = v.get("date") or v.get("fecha") or "N/A"
-                hora_rep = v.get("time") or v.get("hora")  or "N/A"
+                lat      = escolher_valor(v, "latitude", "Latitude")
+                lon      = escolher_valor(v, "longitude", "Longitude")
+                geo      = (
+                    escolher_valor(v, "geo", "Geo", "address", "Address", "endereco", "Domicilio")
+                    or "Local não informado"
+                )
+                data_rep = escolher_valor(
+                    v,
+                    "date",
+                    "Date",
+                    "fecha",
+                    "ReportDate",
+                    "InsertionDate",
+                    default="N/A"
+                )
+                hora_rep = escolher_valor(v, "time", "Time", "hora", default="N/A")
                 maps_url = gerar_maps_url(lat, lon)
 
                 bloco = [
                     f"**🚗 {nome}** | Placa: {placa}",
-                    f"- Ignição: {'🔑 Ligado' if v.get('ignition') else '⭕ Desligado'}",
-                    f"- Velocidade: {v.get('speed', 0)} km/h",
+                    f"- Ignição: {'🔑 Ligado' if valor_verdadeiro(v, 'ignition', 'Ignition') else '⭕ Desligado'}",
+                    f"- Velocidade: {escolher_valor(v, 'speed', 'Speed', 'GpsSpeed', 'gpsSpeed', default=0)} km/h",
                     f"- Condutor: {get_condutor(v)}",
                     f"- Último reporte: {data_rep} às {hora_rep}",
                     f"- Local: {geo}",
