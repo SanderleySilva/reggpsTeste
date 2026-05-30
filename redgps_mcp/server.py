@@ -3,11 +3,13 @@ import os
 import uvicorn
 from dotenv import load_dotenv
 from mcp.server.fastmcp import FastMCP
+from starlette.middleware.base import BaseHTTPMiddleware
+from starlette.middleware.cors import CORSMiddleware
 from tools.clientes import registrar_tools_clientes
 from tools.veiculos import registrar_tools_veiculos
-from starlette.middleware.base import BaseHTTPMiddleware
 
 load_dotenv()
+
 
 class FixHostMiddleware(BaseHTTPMiddleware):
     async def dispatch(self, request, call_next):
@@ -16,6 +18,7 @@ class FixHostMiddleware(BaseHTTPMiddleware):
             for k, v in request.scope["headers"]
         ]
         return await call_next(request)
+
 
 mcp = FastMCP(
     name="RedGPS",
@@ -34,15 +37,39 @@ mcp = FastMCP(
 
     Responda sempre em português do Brasil.
     """,
-    json_response=True,
+    # CORREÇÃO: removido json_response=True — causa conflito com SSE transport.
+    # O FastMCP gerencia a serialização internamente no modo SSE.
 )
 
 registrar_tools_clientes(mcp)
 registrar_tools_veiculos(mcp)
 
-# app no nível do módulo — necessário para importação
-app = mcp.streamable_http_app()
+# CORREÇÃO: trocado streamable_http_app() por sse_app().
+#
+# O Claude.ai conecta via SSE (Server-Sent Events) no endpoint /sse,
+# não via Streamable HTTP. Com streamable_http_app() o handshake de
+# inicialização falha silenciosamente e o Claude.ai tenta OAuth como
+# fallback — causando o erro "Couldn't register with redegps's sign-in service".
+#
+# sse_app() expõe:
+#   GET  /sse   → stream de eventos (Claude.ai conecta aqui)
+#   POST /messages → recebe chamadas de tools
+app = mcp.sse_app()
+
+# CORREÇÃO: adicionado CORSMiddleware antes do FixHostMiddleware.
+#
+# Sem CORS, o browser bloqueia as requisições do Claude.ai para o servidor
+# com erro "Access-Control-Allow-Origin missing".
+# allow_origins=["*"] libera qualquer origem — adequado para servidor MCP próprio.
+app.add_middleware(
+    CORSMiddleware,
+    allow_origins=["*"],
+    allow_methods=["*"],
+    allow_headers=["*"],
+)
+
 app.add_middleware(FixHostMiddleware)
+
 
 if __name__ == "__main__":
     apikey = os.getenv("REDGPS_APIKEY", "")
@@ -52,6 +79,8 @@ if __name__ == "__main__":
         print(f"✅ Token configurado: {apikey[:8]}...")
 
     print("🚀 Iniciando RedGPS MCP Server...")
+    print("📡 Endpoint SSE: /sse")
+    print("📨 Endpoint mensagens: /messages")
 
     port = int(os.environ.get("PORT", 8000))
 
